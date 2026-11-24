@@ -234,4 +234,20 @@ describe(runConfigFixing, () => {
 		);
 		expect(results.allFileResults.get(filePath)?.reports).toEqual([]);
 	});
+
+	it("does not apply fixes to a file edited after it was linted", async () => {
+		getFix.mockImplementation(() => {
+			host.vfsUpsertFile(filePath, "xyz");
+			return fixes;
+		});
+
+		const results = await runConfigFixing(config, host, options);
+
+		expect(results.changed).toEqual(new Set());
+		expect(host.readFileSync(filePath)).toBe("xyz");
+		expect(writeFile).toHaveBeenCalledExactlyOnceWith(
+			cacheLocation,
+			expect.any(String),
+		);
+	});
 });

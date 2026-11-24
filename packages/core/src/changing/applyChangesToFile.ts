@@ -8,26 +8,44 @@ import { applyChangesToText } from "./applyChangesToText.ts";
 
 const log = debugForFile(import.meta.url);
 
+/**
+ * Applies changes to a file on disk, unless the file no longer contains
+ * `expectedSourceText`: the text the changes' ranges were computed against.
+ * @returns Whether the file was written.
+ */
 export async function applyChangesToFile(
 	host: LinterHost,
 	absoluteFilePath: string,
 	changes: FileChange[],
-): Promise<void> {
+	expectedSourceText?: string,
+): Promise<boolean> {
 	log(
 		"Collecting %d changes to apply to file: %s",
 		changes.length,
 		absoluteFilePath,
 	);
 
-	const fileContent = await host.readFile(absoluteFilePath);
-	const updatedFileContent = applyChangesToText(
-		changes,
-		nullThrows(fileContent, "Expected linted file to exist."),
+	const fileContent = nullThrows(
+		await host.readFile(absoluteFilePath),
+		"Expected linted file to exist.",
 	);
+
+	if (expectedSourceText !== undefined && fileContent !== expectedSourceText) {
+		log(
+			"Skipping changes to file modified since linting: %s",
+			absoluteFilePath,
+		);
+		return false;
+	}
 
 	log("Writing %d changes to file: %s", changes.length, absoluteFilePath);
 
-	await host.writeFile(absoluteFilePath, updatedFileContent);
+	await host.writeFile(
+		absoluteFilePath,
+		applyChangesToText(changes, fileContent),
+	);
 
 	log("Wrote changes to file: %s", absoluteFilePath);
+
+	return true;
 }
