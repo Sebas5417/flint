@@ -7,6 +7,7 @@ import { RuleCreator } from "../rules/RuleCreator.ts";
 import type { Fix } from "../types/changes.ts";
 import type { LanguageReport } from "../types/languages.ts";
 import type { CharacterReportRange } from "../types/ranges.ts";
+import { runConfig } from "./runConfig.ts";
 import { runConfigFixing } from "./runConfigFixing.ts";
 
 const filePath = "/root/file.txt";
@@ -193,12 +194,8 @@ describe(runConfigFixing, () => {
 					?.reports.map((report) => report.data),
 			).toEqual(limit === 10 ? [] : [{ value: "10" }]);
 			expect(fixingHost.readFileSync(cachedFilePath)).toBe("5");
-			expect(
-				results.allFileResults
-					.get(cachedFilePath)
-					?.reports.map((report) => report.data),
-			).toEqual([{ value: "5" }]);
-			expect(visit).toHaveBeenCalledTimes(12);
+			expect(results.allFileResults.get(cachedFilePath)?.reports).toEqual([]);
+			expect(visit).toHaveBeenCalledTimes(11);
 			expect(
 				writeFixingFile.mock.calls.filter(
 					([writtenPath]) => writtenPath === filePath,
@@ -210,9 +207,7 @@ describe(runConfigFixing, () => {
 			expect(
 				cache.files[filePath]?.reports?.map((report) => report.data) ?? [],
 			).toEqual(limit === 10 ? [] : [{ value: "10" }]);
-			expect(
-				cache.files[cachedFilePath]?.reports?.map((report) => report.data),
-			).toEqual([{ value: "5" }]);
+			expect(cache.files[cachedFilePath]?.reports).toBeUndefined();
 			expect(fixingHost.readFileSync("/root/unused.json")).toBeUndefined();
 		},
 	);
@@ -249,5 +244,34 @@ describe(runConfigFixing, () => {
 			cacheLocation,
 			expect.any(String),
 		);
+	});
+
+	it("does not apply cached fixes to a file edited after the cache was read", async () => {
+		getFix.mockReturnValue(fixes);
+		host.vfsUpsertFile(config.filePath, "");
+		await runConfig(config, host, { cacheLocation, ignoreCache: true });
+		visit.mockClear();
+		const readFile = host.readFile.bind(host);
+		const readFileSpy = vi
+			.spyOn(host, "readFile")
+			.mockImplementation(async (path) => {
+				if (path === filePath) {
+					host.vfsUpsertFile(filePath, "xyz");
+				}
+				return await readFile(path);
+			});
+
+		try {
+			const results = await runConfigFixing(config, host, {
+				...options,
+				ignoreCache: false,
+			});
+
+			expect(visit).toHaveBeenCalledTimes(1);
+			expect(results.changed).toEqual(new Set());
+			expect(host.readFileSync(filePath)).toBe("xyz");
+		} finally {
+			readFileSpy.mockRestore();
+		}
 	});
 });
