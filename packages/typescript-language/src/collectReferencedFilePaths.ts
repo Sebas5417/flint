@@ -1,51 +1,88 @@
-import ts, { SyntaxKind } from "typescript";
+import { join } from "pathe";
+import type ts from "typescript";
+import { SyntaxKind } from "typescript";
 
+import { getModuleLookups } from "./getModuleLookups.ts";
 import type * as AST from "./types/ast.ts";
 import { forEachChild } from "./utils/forEachChild.ts";
+
+export interface ReferencedFilePaths {
+	/**
+	 * Workspace modules the file imports, and existing files that decide how its imports resolve.
+	 */
+	dependencies: Set<string>;
+
+	/**
+	 * Paths module resolution checks before an import's result, and that don't exist.
+	 */
+	missingDependencies: Set<string>;
+}
 
 export function collectReferencedFilePaths(
 	program: ts.Program,
 	sourceFile: AST.SourceFile,
 	moduleResolutionHost: ts.ModuleResolutionHost,
-): string[] {
-	const modulePaths = new Set<string>();
+): ReferencedFilePaths {
+	const compilerOptions = program.getCompilerOptions();
+	const dependencies = new Set<string>();
+	const missingDependencies = new Set<string>();
 
-	function resolveModulePath(moduleSpecifier: string): string | undefined {
-		const resolved = ts.resolveModuleName(
+	function resolveModule(moduleSpecifier: AST.StringLiteral): void {
+		// The program's own resolution includes its host's, such as Volar's for `.vue` files.
+		const resolvedModule = program.getResolvedModuleFromModuleSpecifier(
 			moduleSpecifier,
-			sourceFile.fileName,
-			program.getCompilerOptions(),
-			moduleResolutionHost,
-		);
+			sourceFile,
+		)?.resolvedModule;
+		const resolvedPath =
+			resolvedModule &&
+			(resolvedModule.originalPath ?? resolvedModule.resolvedFileName);
 
-		return resolved.resolvedModule?.isExternalLibraryImport === false
-			? resolved.resolvedModule.resolvedFileName
-			: undefined;
+		if (resolvedModule?.isExternalLibraryImport === false) {
+			dependencies.add(resolvedModule.resolvedFileName);
+		}
+
+		for (const lookup of getModuleLookups(
+			moduleSpecifier.text,
+			sourceFile.fileName,
+			compilerOptions,
+			(packageDirectory) =>
+				!!moduleResolutionHost.directoryExists?.(packageDirectory) &&
+				!moduleResolutionHost.fileExists(
+					join(packageDirectory, "package.json"),
+				),
+		)) {
+			// Reaching the result here means no package.json decided it, so the file itself is what can change.
+			if (lookup.path === resolvedPath) {
+				dependencies.add(resolvedPath);
+				return;
+			}
+			if (!moduleResolutionHost.fileExists(lookup.path)) {
+				missingDependencies.add(lookup.path);
+				continue;
+			}
+			dependencies.add(lookup.path);
+			if (lookup.scope && resolvedPath?.startsWith(`${lookup.scope}/`)) {
+				return;
+			}
+		}
 	}
 
 	function visit(node: AST.AnyNode) {
-		let path: string | undefined;
-
 		if (isImportDeclaration(node)) {
 			// import { x } from "./foo";
-			path = node.moduleSpecifier.text;
+			resolveModule(node.moduleSpecifier);
 		} else if (isExportDeclaration(node)) {
 			// export { x } from "./foo"; or export * from "./foo";
-			path = node.moduleSpecifier.text;
+			resolveModule(node.moduleSpecifier);
 		} else if (isImportCall(node)) {
 			// const x = import("./foo")
-			path = node.arguments[0].text;
+			resolveModule(node.arguments[0]);
 		} else if (isAwaitImportCall(node)) {
 			// const x = await import("./foo")
-			path = node.expression.arguments[0].text;
+			resolveModule(node.expression.arguments[0]);
 		} else if (isImportTypeNode(node)) {
 			// type T = import("./foo") or type T = typeof import("./foo");
-			path = node.argument.literal.text;
-		}
-
-		const resolvedPath = path && resolveModulePath(path);
-		if (resolvedPath) {
-			modulePaths.add(resolvedPath);
+			resolveModule(node.argument.literal);
 		}
 
 		forEachChild(node, visit);
@@ -53,7 +90,7 @@ export function collectReferencedFilePaths(
 
 	visit(sourceFile);
 
-	return Array.from(modulePaths);
+	return { dependencies, missingDependencies };
 }
 
 function isAwaitImportCall(node: AST.AnyNode): node is AST.AwaitExpression & {
