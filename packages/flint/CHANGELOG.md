@@ -1,5 +1,17 @@
 # flint
 
+## 0.20.0
+
+### Minor Changes
+
+- [#3519](https://github.com/flint-fyi/flint/pull/3519) [`d48d77c`](https://github.com/flint-fyi/flint/commit/d48d77c525852734b3d828f065ea5dfbf253823d) - Use Formatly to detect the project's formatter instead of requiring Prettier as a peer dependency.
+  Formatting is skipped when no formatter is detected.
+
+### Patch Changes
+
+- Updated dependencies [[`d48d77c`](https://github.com/flint-fyi/flint/commit/d48d77c525852734b3d828f065ea5dfbf253823d)]:
+  - @flint.fyi/cli@0.24.0
+
 ## 0.19.2
 
 ### Patch Changes
